@@ -11,12 +11,12 @@ pub struct CreateLobbyRequest {
     pub player_name: String
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct WsBody {
     lobby_name: String
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct  LobbyResponse {
     pub url: String,
     pub game_state: Option<GameState>
@@ -31,6 +31,7 @@ pub struct EnterLobby {
 
 pub async fn create_lobby(req: CreateLobbyRequest, lobbies: Lobbies) -> Result<impl Reply> {
     //let uuid =  Uuid::new_v4().as_simple().to_string();
+    println!("received: {:?}", req.name);
     lobbies.write().await.insert(req.name.clone(), 
         Lobby { 
             players: HashMap::from_iter([(req.player_name.clone(), 
@@ -58,6 +59,7 @@ pub async fn create_lobby(req: CreateLobbyRequest, lobbies: Lobbies) -> Result<i
         });
 
     tokio::task::spawn(async move  {
+        println!("started game loop");
         loop {
             tokio::time::sleep(tokio::time::Duration::from_millis(30)).await;
             let mut locked = lobbies.write().await;
@@ -79,10 +81,12 @@ pub async fn create_lobby(req: CreateLobbyRequest, lobbies: Lobbies) -> Result<i
         }
     });
 
-    Ok(json(&LobbyResponse {
-        url: format!("ws://127.0.0.1:8000/ws/{}", req.player_name),
+    let msg = LobbyResponse {
+        url: format!("ws://localhost:8000/ws/{}", req.player_name),
         game_state: None
-    }))
+    };
+    println!("sent : {:?}", msg);
+    Ok(json(&msg))
 }
 
 pub async fn delete_lobby(name: String, lobbies: Lobbies) -> Result<impl Reply> {
@@ -101,13 +105,14 @@ pub async fn enter_lobby(req: EnterLobby, lobbies: Lobbies) ->  Result<impl Repl
     locked.get_mut(&req.player_name).unwrap().game.add_player(&req.player_name, game_state::Vec2 { x: 0.0, y: 0.0 });
 
     Ok(json(&LobbyResponse {
-        url: format!("ws://127.0.0.1:8000/ws/{}", uuid),
+        url: format!("ws://localhost:8000/ws/{}", uuid),
         game_state: Some(locked.get_mut(&req.player_name).unwrap().game.clone())
     }))
 
 }
 
 pub async fn ws_handler(ws: warp::ws::Ws, body: WsBody, id: String, lobbies: Lobbies) ->  Result<impl Reply> {
+    println!("{:?}", body);
     let player = lobbies.read().await.get(&body.lobby_name).unwrap().players.get(&id).cloned();
     match  player {
         Some(pl) => Ok(ws.on_upgrade(move |socket| ws::player_connection(socket, id, lobbies, body.lobby_name, pl))),

@@ -2,9 +2,9 @@ use std::{collections::HashMap, thread, time};
 use std::sync::mpsc::{self, Sender, Receiver};
 use macroquad::ui::{hash, root_ui, widgets};
 use serde_json::{from_str, to_string};
-use crate::handler::EnterLobby;
-use crate::ws::{self, GameEvent, Commands};
-use crate::{handler::{CreateLobbyRequest, LobbyResponse}, game_state::{self, GameState, PlayerState}, time_util};
+use multiplayer_game::handler::EnterLobby;
+use multiplayer_game::ws::{self, GameEvent, Commands};
+use multiplayer_game::{handler::{CreateLobbyRequest, LobbyResponse}, game_state::{self, GameState, PlayerState}, time_util};
 use macroquad::prelude::*;
 use game_state::Vec2;
 use reqwest::blocking;
@@ -32,15 +32,17 @@ async fn main() {
         let res = match msg {
             SetupMessage::CreateLobby { lobby_name, player_name } => {
                 let client = blocking::Client::new();
-                let res = client
+                let req = client
                     .post(format!("{URL}/create_lobby"))
-                    .json(&to_string(&CreateLobbyRequest {name: lobby_name.clone(), player_name: player_name.clone()}).unwrap())
-                    .send()
-                    .unwrap()
-                    .text()
+                    .json(&CreateLobbyRequest {name: lobby_name.clone(), player_name: player_name.clone()});
+                println!("{:?}", req);
+                let res = req.send()
                     .unwrap();
-
-                let res: LobbyResponse = from_str(&res).unwrap();
+                println!("{:?}", res);
+                let res = res.json()
+                    .unwrap();
+                
+                //let res: LobbyResponse = from_str(&res).unwrap();
                 Some(res)
             }, 
             SetupMessage::EnterLobby { lobby_name, player_name } => {
@@ -81,12 +83,12 @@ async fn main() {
     
     let mut vertical = 0.0;
     let mut horizontal = 0.0;
+    let mut lobby_name = String::new();
+    let mut player_name = String::new();
     loop {
         clear_background(WHITE);
         if in_lobby_menu {
             //show ui
-            let mut lobby_name = String::new();
-            let mut player_name = String::new();
             widgets::Window::new(hash!(), vec2(470., 50.), vec2(300., 300.))
                 .label("lobby menu")
                 .ui(&mut *root_ui(), |ui| {
@@ -104,18 +106,19 @@ async fn main() {
                             player_name: player_name.clone() }).unwrap();
                     }
                 });
-            let msg = receiver_lobby_enter.try_recv().unwrap();
-            match msg {
-                SetupMessage::LobbyEntered { url, game_state: game } => {
-                    let (receiver, sender) = spawn_comm_threads(url);
-                    in_lobby_menu = false;
-                    events_receiver = Some(receiver);
-                    action_sender = Some(sender);
-                    if let Some(game) = game {
-                        game_state = game;
-                    }
-                },
-                _ => {}
+            if let Ok(msg) = receiver_lobby_enter.try_recv() {
+                match msg {
+                    SetupMessage::LobbyEntered { url, game_state: game } => {
+                        let (receiver, sender) = spawn_comm_threads(url);
+                        in_lobby_menu = false;
+                        events_receiver = Some(receiver);
+                        action_sender = Some(sender);
+                        if let Some(game) = game {
+                            game_state = game;
+                        }
+                    },
+                    _ => {}
+                }
             }
         } else {
             let mut actions = Vec::with_capacity(10);
@@ -193,7 +196,9 @@ fn spawn_comm_threads(url: String) -> (Receiver<ws::GameEvent>, Sender<ws::Comma
     let (events_sender, events_receiver): (Sender<ws::GameEvent>, Receiver<ws::GameEvent>) = mpsc::channel();
     let (action_sender, action_receiver): (Sender<ws::Commands>, Receiver<ws::Commands>) = mpsc::channel();
 
-    let (mut socket, response) = connect(Url::parse(&url).unwrap()).expect("cant connect");
+    let url = Url::parse(&url).unwrap();
+    println!("{:?}", url);
+    let (mut socket, response) = connect(url).map_err(|e| eprintln!("{e}")).expect("cant connect");
     thread::spawn(move || {
         loop {
             let msg = socket.read_message().unwrap().to_text().unwrap().to_string();

@@ -82,18 +82,24 @@ pub enum Action {
 pub struct GameState {
     pub players: HashMap<String, PlayerState>,
     pub bullets: Vec<BulletState>,
-    pub last_time: f32, 
+    pub last_time: f64, 
     pub actions: Vec<Action>
 }
 
 impl GameState {
-    pub fn update(&mut self, current_time: f32) -> Vec<Action>{
-        let delta_time = current_time - self.last_time;
+    pub fn update(&mut self, current_time: f64) -> Vec<Action>{
+        let delta_time = (current_time - self.last_time) as f32;
         self.last_time = current_time;
 
         while !self.actions.is_empty() {
             match self.actions.pop().unwrap() {
-                Action::DeleteBullet(idx) => self.remove_bullet(idx),
+                Action::DeleteBullet(idx) => {
+                    self.bullets.iter_mut().for_each(|bullet| if bullet.index > idx {
+                        bullet.index -= 1;
+                    });
+                    self.remove_bullet(idx);
+
+                },
                 Action::DeletePlayer(name) => self.kill_player(&name)
             }
         }
@@ -123,11 +129,48 @@ impl GameState {
 
     pub fn add_bullet(&mut self, pos: Vec2, vel: Vec2){
         self.bullets.push(BulletState { position: pos, velocity: vel, lifetime: 10.0, 
-            time: time_util::get_current_time(), index: self.bullets.len() })
+            time: 0.0, index: self.bullets.len() })
     }
 
     pub fn add_player(&mut self, name: &str, pos: Vec2){
         self.players.insert(name.to_string(), PlayerState { name: name.to_string(), position: pos, velocity: Vec2 { x: 0.0, y: 0.0 }, 
-            angle: 0.0, health: 100, alive: true}).unwrap();
+            angle: 0.0, health: 100, alive: true});
     }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+
+    #[test]
+    fn test() {
+        let mut game = GameState {
+            players: HashMap::from_iter([("pl".to_string(),
+                PlayerState {
+                    position: Vec2 { x: 100.0, y: 100.0 },
+                    velocity: Vec2 { x: 10.0, y: 0.0 },
+                    angle: 0.0,
+                    name: "pl".to_string().clone(),
+                    health: 100,
+                    alive: true
+                }),
+            ]),
+            bullets: Vec::with_capacity(50),
+            last_time: time_util::get_current_time(),
+            actions: Vec::with_capacity(10)
+    
+        };
+
+        game.add_bullet(Vec2 { x: 0.0, y: 0.0 }, Vec2 { x: BULLET_VEL, y: 0.0 });
+
+        game.update(time_util::get_current_time());
+        println!("{:?}", game);
+        std::thread::sleep(std::time::Duration::from_millis(25));
+        game.update(time_util::get_current_time());
+        println!("{:?}", game);
+
+
+    }
+
 }

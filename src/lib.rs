@@ -47,7 +47,7 @@ pub async fn server() {
 
     let ws_route = warp::path("ws")
             .and(warp::ws())
-            .and(warp::body::json())
+            .and(warp::path::param())
             .and(warp::path::param())
             .and(with_lobbies(lobbies.clone()))
             .and_then(handler::ws_handler);

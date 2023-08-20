@@ -13,8 +13,9 @@ pub enum Commands {
     UpdateAngle(f32)
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize, Serialize, Debug)]
 pub enum GameEvent {
+    AddPlayer{x: f32, y: f32, name: String},
     Shooting(String),
     UpdateVelocity {x: f32, y: f32, name: String},
     UpdateAngle {angle: f32, name: String},
@@ -36,14 +37,18 @@ pub async fn player_connection(ws: WebSocket, id: String, lobbies: Lobbies, lobb
     player.sender = Some(player_sender);
     lobbies.write().await.get_mut(&lobby_name).unwrap().players.insert(id.clone(), player);
 
+    println!("listening");
     while let Some(result) = ws_receiver.next().await {
+        println!("received message");
         let msg = match  result {
             Ok(msg) => msg,
             Err(e) => {
-                eprintln!("error receiving ws message for id: {}): {}", id.clone(), e);
+                println!("error receiving ws message for id: {}): {}", id.clone(), e);
+                //println!("error receiving ws message for id");
                 break;
             }
         };
+        //println!("received message from {}: {:?}", id, msg);
         player_msg(&id, msg, &lobbies, &lobby_name).await;
     }
 
@@ -113,6 +118,7 @@ async fn player_msg(id: &str, msg: Message, lobbies: &Lobbies, lobby_name: &str)
 }
 
 pub fn broadcast_event(lobby: &Lobby, event: GameEvent) {
+    println!("broadcasting: {:?}", event);
     lobby.players.iter().for_each(|(_, player)| {
         if let Some(sender) = &player.sender {
             let _ = sender.send(Ok(Message::text(to_string(&event).unwrap())));

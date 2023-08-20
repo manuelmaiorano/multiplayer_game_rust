@@ -10,6 +10,11 @@ use game_state::Vec2;
 use reqwest::blocking;
 use tungstenite::{connect, Message};
 use url::Url;
+use tokio::runtime::Runtime;
+use tokio_tungstenite::{connect_async, tungstenite::protocol};
+use futures::{StreamExt, SinkExt};
+
+
 
 const URL: &str = "http://localhost:8000";
 
@@ -47,18 +52,21 @@ async fn main() {
             }, 
             SetupMessage::EnterLobby { lobby_name, player_name } => {
                 let client = blocking::Client::new();
-                let res = client
+                let req = client
                     .post(format!("{URL}/register"))
-                    .json(&to_string(&EnterLobby {
+                    .json(&EnterLobby {
                         name: lobby_name.clone(), 
                         player_name: player_name.clone()
-                    }).unwrap())
-                    .send()
-                    .unwrap()
-                    .text()
-                    .unwrap();
+                    });
+                println!("{:?}", req);
+                let res = req
+                        .send()
+                        .unwrap();
+                println!("{:?}", res);
+                let res: LobbyResponse = res
+                        .json()
+                        .unwrap();
 
-                let res: LobbyResponse = from_str(&res).unwrap();
                 Some(res)
             },
             _ => {None}
@@ -81,8 +89,8 @@ async fn main() {
         actions: Vec::with_capacity(10)
     };
     
-    let mut vertical = 0.0;
-    let mut horizontal = 0.0;
+    let mut vertical: f32 = 0.0;
+    let mut horizontal: f32 = 0.0;
     let mut lobby_name = String::new();
     let mut player_name = String::new();
     loop {
@@ -109,7 +117,7 @@ async fn main() {
             if let Ok(msg) = receiver_lobby_enter.try_recv() {
                 match msg {
                     SetupMessage::LobbyEntered { url, game_state: game } => {
-                        let (receiver, sender) = spawn_comm_threads(url);
+                        let (receiver, sender) = spawn_comm_threads_async(url);
                         in_lobby_menu = false;
                         events_receiver = Some(receiver);
                         action_sender = Some(sender);
@@ -141,15 +149,35 @@ async fn main() {
                 vertical = 1.0;
                 state_change = true;
             }
+            if is_key_released(KeyCode::A) {
+                horizontal = 0.0;
+                state_change = true;
+            } else if is_key_released(KeyCode::D) {
+                horizontal = 0.0;
+                state_change = true;
+            }
+            if is_key_released(KeyCode::W) {
+                vertical = 0.0;
+                state_change = true;
+            } else if is_key_released(KeyCode::S) {
+                vertical = 0.0;
+                state_change = true;
+            }
             
             if state_change {
-                let vel = vec2(horizontal, vertical).normalize() * 10.0;
-                actions.push(Commands::UpdateVelocity { x: vel.x, y: vel.y });
+                if horizontal.abs() > 0.0 || vertical.abs() > 0.0 {
+                    let vel = vec2(horizontal, vertical).normalize() * 10.0;
+                    actions.push(Commands::UpdateVelocity { x: vel.x, y: vel.y });
+                } else {
+                    actions.push(Commands::UpdateVelocity { x: 0.0, y: 0.0 });
+                }
             }
 
             while actions.len() > 0 {
                 let action = actions.pop().unwrap();
-                action_sender.as_ref().unwrap().send(action).unwrap();
+                println!("{:?}", action);
+                //action_sender.as_ref().unwrap().send(action).unwrap();
+                action_sender.as_ref().unwrap().send(action).map_err(|e| println!("{e}")).unwrap();
             }
 
             game_state.update(time_util::get_current_time());
@@ -164,8 +192,13 @@ async fn main() {
                 draw_circle(x, y, game_state::BULLET_RADIUS_SIZE, BLACK);
 
             });
-            if let Ok(event) = events_receiver.as_ref().unwrap().try_recv() {
+            if let Ok(event) = events_receiver.as_mut().unwrap().try_recv() {
+                println!("{:?}", game_state.players.get(&player_name).unwrap().position);
+                println!("{:?}", game_state.players.get(&player_name).unwrap().velocity);
                 match event {
+                    GameEvent::AddPlayer { x, y, name } => {
+                        game_state.add_player(&name, Vec2 { x: x, y: y });
+                    },
                     GameEvent::Death(name) => {
                         game_state.kill_player(&name);
                     },
@@ -184,7 +217,7 @@ async fn main() {
                         player.velocity.y = y;
                     }
                 }
-            }
+            } 
         }
         thread::sleep(time::Duration::from_millis(25));
         next_frame().await;
@@ -201,11 +234,59 @@ fn spawn_comm_threads(url: String) -> (Receiver<ws::GameEvent>, Sender<ws::Comma
     let (mut socket, response) = connect(url).map_err(|e| eprintln!("{e}")).expect("cant connect");
     thread::spawn(move || {
         loop {
-            let msg = socket.read_message().unwrap().to_text().unwrap().to_string();
-            events_sender.send(from_str(&msg).unwrap()).unwrap();
             let msg = action_receiver.recv().unwrap();
             socket.write_message(Message::Text(to_string(&msg).unwrap())).unwrap();
+
+            let msg = socket.read_message().unwrap().to_text().unwrap().to_string();
+            println!("{msg}");
+            events_sender.send(from_str(&msg).unwrap()).unwrap();
         }
+    });
+
+    // thread::spawn(move || {
+    //     loop {
+    //         let msg = action_receiver.recv().unwrap();
+    //         socket.write_message(Message::Text(to_string(&msg).unwrap())).unwrap();
+    //     }
+    // });
+
+    (events_receiver, action_sender)
+}
+
+
+fn spawn_comm_threads_async(url: String) -> (tokio::sync::mpsc::UnboundedReceiver<ws::GameEvent>, tokio::sync::mpsc::UnboundedSender<ws::Commands>) {
+    let (events_sender, events_receiver) =  tokio::sync::mpsc::unbounded_channel();
+    let (action_sender, mut action_receiver) = tokio::sync::mpsc::unbounded_channel();
+
+    let url = Url::parse(&url).unwrap();
+    println!("{:?}", url);
+    thread::spawn(move || {
+
+        let rt = Runtime::new().unwrap();
+        rt.block_on(async move {
+            let (mut socket, response) = connect_async(url).await.map_err(|e| eprintln!("{e}")).expect("cant connect");
+            let (mut writer, mut reader) = socket.split();
+            let handle = tokio::spawn(async move {
+                loop {
+                    let action: ws::Commands = action_receiver.recv().await.unwrap();
+                    writer.send(protocol::Message::Text(to_string(&action).unwrap())).await;
+
+                    // if let Ok(action) = action_receiver.try_recv() {
+                    //     writer.send(protocol::Message::Text(to_string(&action).unwrap())).await;
+                    // }
+                }
+                
+            });
+            let handle1 = tokio::spawn(async move {
+                while let Some(event) = reader.next().await {
+                    println!("received event: {:?}", event);
+                    events_sender.send(from_str(&event.unwrap().to_text().unwrap()).unwrap());
+                }
+            });
+
+            tokio::join!(handle, handle1);
+        });
+        
     });
 
     // thread::spawn(move || {

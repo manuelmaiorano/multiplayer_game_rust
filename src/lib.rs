@@ -3,10 +3,12 @@ pub mod ws;
 pub mod game_state;
 pub mod time_util;
 
+use game_state::Action;
 use warp::{ws::Message, Filter, Rejection};
+use game_state::GameEvent;
 use std::{convert::Infallible, collections::HashMap};
 use std::sync::Arc;
-use tokio::sync::{mpsc, RwLock};
+use tokio::sync::{mpsc, broadcast, RwLock};
 
 
 
@@ -20,9 +22,19 @@ pub struct Player{
 
 }
 
+pub enum SetupMessage {
+    AddPlayer(String),
+    GetChannels
+}
+
+pub struct Channels {
+    broadcast_receiver: Option<broadcast::Receiver<GameEvent>>,
+    event_sender: Option<mpsc::UnboundedSender<GameEvent>>
+}
 pub struct Lobby {
-    pub players: HashMap<String, Player>,
-    pub game: game_state::GameState
+    //pub players: HashMap<String, Player>,
+    pub game_setup_sender: mpsc::UnboundedSender<SetupMessage>,
+    pub game_ch_receiver: mpsc::UnboundedReceiver<Channels>
 }
 
 pub async fn server() {

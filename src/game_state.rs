@@ -24,6 +24,16 @@ impl Vec2 {
     }
 }
 
+#[derive(Deserialize, Serialize, Debug, Clone)]
+pub enum GameEvent {
+    AddPlayer{x: f32, y: f32, name: String},
+    Shooting(String),
+    UpdateVelocity {x: f32, y: f32, name: String},
+    UpdateAngle {angle: f32, name: String},
+    Death(String),
+    GameStateSync(GameState)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerState {
     pub name: String,
@@ -87,9 +97,10 @@ pub struct GameState {
 }
 
 impl GameState {
-    pub fn update(&mut self, current_time: f64) -> Vec<Action>{
+    pub fn update(&mut self, current_time: f64) -> Vec<GameEvent>{
         let delta_time = (current_time - self.last_time) as f32;
         self.last_time = current_time;
+        let mut events = Vec::with_capacity(10);
 
         while !self.actions.is_empty() {
             match self.actions.pop().unwrap() {
@@ -100,7 +111,10 @@ impl GameState {
                     self.remove_bullet(idx);
 
                 },
-                Action::DeletePlayer(name) => self.kill_player(&name)
+                Action::DeletePlayer(name) => {
+                    self.kill_player(&name);
+                    events.push(GameEvent::Death(name));
+                }
             }
         }
 
@@ -116,7 +130,7 @@ impl GameState {
             }
         });
         
-        self.actions.clone()
+        events
     }
 
     pub fn kill_player(&mut self, name: &str) {
@@ -135,6 +149,35 @@ impl GameState {
     pub fn add_player(&mut self, name: &str, pos: Vec2){
         self.players.insert(name.to_string(), PlayerState { name: name.to_string(), position: pos, velocity: Vec2 { x: 0.0, y: 0.0 }, 
             angle: 0.0, health: 100, alive: true});
+    }
+
+    pub fn react_to_event(&mut self, event: GameEvent) {
+        match event {
+            GameEvent::AddPlayer { x, y, name } => {
+                self.add_player(&name, Vec2 { x: x, y: y });
+            },
+            GameEvent::Death(name) => {
+                self.kill_player(&name);
+            },
+            GameEvent::Shooting(name) => {
+                let player = self.players.get(&name).unwrap();
+                self.add_bullet(player.position.sum(&Vec2::with_angle(player.angle, 
+                    PLAYER_RADIUS_SIZE + 1.0)), Vec2::with_angle(player.angle, BULLET_VEL));
+            },
+            GameEvent::UpdateAngle { angle, name } => {
+                let player = self.players.get_mut(&name).unwrap();
+                player.angle = angle;
+            },
+            GameEvent::UpdateVelocity { x, y, name } => {
+                let player = self.players.get_mut(&name).unwrap();
+                player.velocity.x = x;
+                player.velocity.y = y;
+            },
+            GameEvent::GameStateSync(gm) => {
+                *self = gm;
+
+            }
+        }
     }
 }
 

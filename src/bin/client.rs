@@ -3,8 +3,8 @@ use std::sync::mpsc::{self, Sender, Receiver};
 use macroquad::ui::{hash, root_ui, widgets};
 use serde_json::{from_str, to_string};
 use multiplayer_game::handler::EnterLobby;
-use multiplayer_game::ws::{self, GameEvent, Commands};
-use multiplayer_game::{handler::{CreateLobbyRequest, LobbyResponse}, game_state::{self, GameState, PlayerState}, time_util};
+use multiplayer_game::ws::{self, Commands};
+use multiplayer_game::{handler::{CreateLobbyRequest, LobbyResponse}, game_state::{self, GameEvent, GameState, PlayerState}, time_util};
 use macroquad::prelude::*;
 use game_state::Vec2;
 use reqwest::blocking;
@@ -131,7 +131,7 @@ async fn main() {
         } else {
             let mut actions = Vec::with_capacity(10);
             if is_key_pressed(KeyCode::Space) {
-                actions.push(Commands::Shoot);
+                actions.push(GameEvent::Shooting(player_name.clone()));
             };
 
             let mut state_change = false;
@@ -167,15 +167,15 @@ async fn main() {
             if state_change {
                 if horizontal.abs() > 0.0 || vertical.abs() > 0.0 {
                     let vel = vec2(horizontal, vertical).normalize() * 30.0;
-                    actions.push(Commands::UpdateVelocity { x: vel.x, y: vel.y });
+                    actions.push(GameEvent::UpdateVelocity { x: vel.x, y: vel.y, name: player_name.clone() });
                 } else {
-                    actions.push(Commands::UpdateVelocity { x: 0.0, y: 0.0 });
+                    actions.push(GameEvent::UpdateVelocity { x: 0.0, y: 0.0, name: player_name.clone() });
                 }
             }
 
             while actions.len() > 0 {
                 let action = actions.pop().unwrap();
-                println!("{:?}", action);
+                println!("trying to send: {:?}", action);
                 //action_sender.as_ref().unwrap().send(action).unwrap();
                 action_sender.as_ref().unwrap().send(action).map_err(|e| println!("{e}")).unwrap();
             }
@@ -193,30 +193,7 @@ async fn main() {
 
             });
             if let Ok(event) = events_receiver.as_mut().unwrap().try_recv() {
-                println!("{:?}", game_state.players.get(&player_name).unwrap().position);
-                println!("{:?}", game_state.players.get(&player_name).unwrap().velocity);
-                match event {
-                    GameEvent::AddPlayer { x, y, name } => {
-                        game_state.add_player(&name, Vec2 { x: x, y: y });
-                    },
-                    GameEvent::Death(name) => {
-                        game_state.kill_player(&name);
-                    },
-                    GameEvent::Shooting(name) => {
-                        let player = game_state.players.get(&name).unwrap();
-                        game_state.add_bullet(player.position.sum(&Vec2::with_angle(player.angle, 
-                            game_state::PLAYER_RADIUS_SIZE + 1.0)), Vec2::with_angle(player.angle, game_state::BULLET_VEL));
-                    },
-                    GameEvent::UpdateAngle { angle, name } => {
-                        let player = game_state.players.get_mut(&name).unwrap();
-                        player.angle = angle;
-                    },
-                    GameEvent::UpdateVelocity { x, y, name } => {
-                        let player = game_state.players.get_mut(&name).unwrap();
-                        player.velocity.x = x;
-                        player.velocity.y = y;
-                    }
-                }
+                game_state.react_to_event(event);
             } 
         }
         thread::sleep(time::Duration::from_millis(25));
@@ -225,8 +202,8 @@ async fn main() {
 }
 
 
-fn spawn_comm_threads(url: String) -> (Receiver<ws::GameEvent>, Sender<ws::Commands>) {
-    let (events_sender, events_receiver): (Sender<ws::GameEvent>, Receiver<ws::GameEvent>) = mpsc::channel();
+fn spawn_comm_threads(url: String) -> (Receiver<GameEvent>, Sender<ws::Commands>) {
+    let (events_sender, events_receiver): (Sender<GameEvent>, Receiver<GameEvent>) = mpsc::channel();
     let (action_sender, action_receiver): (Sender<ws::Commands>, Receiver<ws::Commands>) = mpsc::channel();
 
     let url = Url::parse(&url).unwrap();
@@ -254,7 +231,7 @@ fn spawn_comm_threads(url: String) -> (Receiver<ws::GameEvent>, Sender<ws::Comma
 }
 
 
-fn spawn_comm_threads_async(url: String) -> (tokio::sync::mpsc::UnboundedReceiver<ws::GameEvent>, tokio::sync::mpsc::UnboundedSender<ws::Commands>) {
+fn spawn_comm_threads_async(url: String) -> (tokio::sync::mpsc::UnboundedReceiver<GameEvent>, tokio::sync::mpsc::UnboundedSender<GameEvent>) {
     let (events_sender, events_receiver) =  tokio::sync::mpsc::unbounded_channel();
     let (action_sender, mut action_receiver) = tokio::sync::mpsc::unbounded_channel();
 
@@ -268,8 +245,8 @@ fn spawn_comm_threads_async(url: String) -> (tokio::sync::mpsc::UnboundedReceive
             let (mut writer, mut reader) = socket.split();
             let handle = tokio::spawn(async move {
                 loop {
-                    let action: ws::Commands = action_receiver.recv().await.unwrap();
-                    writer.send(protocol::Message::Text(to_string(&action).unwrap())).await;
+                    let action: GameEvent = action_receiver.recv().await.unwrap();
+                    writer.send(protocol::Message::Text(to_string(&action).unwrap())).await.unwrap();
 
                     // if let Ok(action) = action_receiver.try_recv() {
                     //     writer.send(protocol::Message::Text(to_string(&action).unwrap())).await;
@@ -280,7 +257,7 @@ fn spawn_comm_threads_async(url: String) -> (tokio::sync::mpsc::UnboundedReceive
             let handle1 = tokio::spawn(async move {
                 while let Some(event) = reader.next().await {
                     println!("received event: {:?}", event);
-                    events_sender.send(from_str(&event.unwrap().to_text().unwrap()).unwrap());
+                    events_sender.send(from_str(&event.unwrap().to_text().unwrap()).unwrap()).unwrap();
                 }
             });
 

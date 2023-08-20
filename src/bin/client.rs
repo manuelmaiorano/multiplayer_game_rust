@@ -166,7 +166,7 @@ async fn main() {
             
             if state_change {
                 if horizontal.abs() > 0.0 || vertical.abs() > 0.0 {
-                    let vel = vec2(horizontal, vertical).normalize() * 10.0;
+                    let vel = vec2(horizontal, vertical).normalize() * 30.0;
                     actions.push(Commands::UpdateVelocity { x: vel.x, y: vel.y });
                 } else {
                     actions.push(Commands::UpdateVelocity { x: 0.0, y: 0.0 });

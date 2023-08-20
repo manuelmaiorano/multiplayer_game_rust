@@ -120,7 +120,7 @@ impl GameState {
     }
 
     pub fn kill_player(&mut self, name: &str) {
-        self.players.remove(name).unwrap();
+        self.players.remove(name);
     }
 
     pub fn remove_bullet(&mut self, index: usize) {
